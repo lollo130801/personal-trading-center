@@ -57,6 +57,26 @@ def _fourier(df: pd.DataFrame, params: Dict[str, float]) -> pd.DataFrame:
     return pd.DataFrame({"FourierFiltered": filtered})
 
 
+def _fourier_waves(df: pd.DataFrame, params: Dict[str, float]) -> pd.DataFrame:
+    top_waves = int(params["top_waves"])
+    values = df["close"].to_numpy()
+    n = len(values)
+    fft = np.fft.fft(values)
+    freqs = np.fft.fftfreq(n)
+    magnitude = np.abs(fft)
+    magnitude[0] = 0
+    top_indices = np.argsort(magnitude)[-top_waves:]
+    waves = {}
+    for idx, freq_idx in enumerate(top_indices, start=1):
+        mask = np.zeros_like(fft, dtype=complex)
+        mask[freq_idx] = fft[freq_idx]
+        if freq_idx != 0:
+            mask[-freq_idx] = fft[-freq_idx]
+        wave = np.real(np.fft.ifft(mask))
+        waves[f"Wave_{idx}"] = wave
+    return pd.DataFrame(waves)
+
+
 def _kalman(df: pd.DataFrame, params: Dict[str, float]) -> pd.DataFrame:
     transition_cov = params["transition_cov"]
     observation_cov = params["observation_cov"]
@@ -105,6 +125,13 @@ INDICATORS: List[IndicatorSpec] = [
         params={"components": 10},
         placement="overlay",
         compute=_fourier,
+    ),
+    IndicatorSpec(
+        name="FourierWaves",
+        description="Onde principali dalla trasformata di Fourier",
+        params={"top_waves": 3},
+        placement="below",
+        compute=_fourier_waves,
     ),
     IndicatorSpec(
         name="Kalman",

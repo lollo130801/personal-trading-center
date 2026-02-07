@@ -5,10 +5,13 @@ Piattaforma locale per visualizzare mercati e indicatori in maniera interattiva,
 ## Caratteristiche principali
 - Titolo modificabile liberamente.
 - Grafici candlestick, linee o barre.
+- Volumi opzionali in un pannello dedicato.
 - Indicatori sovrapposti, in pannelli sotto al grafico o in tab dedicate.
 - Indicatori di default: SMA, EMA, WMA, RSI, filtro Fourier, filtro di Kalman.
+- Onde principali di Fourier con suggerimenti ML per rialzo/ribasso.
 - Supporto per indicatori personalizzati in Python.
 - Dati in tempo reale (minimo 1 secondo, massimo 1 mese) tramite Binance o Yahoo Finance.
+- Sessioni salvabili e news/report economici (Investing.com) opzionali.
 
 ## Avvio rapido
 
@@ -54,3 +57,4 @@ INDICATORS = [
 - `services/market_data.py` — accesso ai dati.
 - `indicators/` — indicatori di default.
 - `custom_indicators/` — indicatori custom.
+- `sessions/` — sessioni salvate localmente.
