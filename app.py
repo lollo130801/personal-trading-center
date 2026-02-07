@@ -19,10 +19,14 @@ st.title("Personal Trading Center")
 custom_indicator_dir = Path(__file__).parent / "custom_indicators"
 
 with st.sidebar:
-    st.header("Configurazione mercato")
+    st.header("Mercati")
     title_override = st.text_input("Titolo dashboard", "Mercati e Indicatori")
     source = st.selectbox("Fonte dati", ["binance", "yfinance"], index=0)
-    symbol = st.text_input("Simbolo", "BTC/USDT" if source == "binance" else "AAPL")
+    symbol = st.text_input("Simbolo principale", "BTC/USDT" if source == "binance" else "AAPL")
+    compare_symbols = st.text_input(
+        "Confronta con (separati da virgola)",
+        "ETH/USDT" if source == "binance" else "MSFT, TSLA",
+    )
     interval = st.selectbox(
         "Intervallo",
         ["1s", "5s", "15s", "1m", "5m", "15m", "1h", "1d", "1wk", "1mo"],
@@ -31,7 +35,8 @@ with st.sidebar:
     limit = st.slider("Numero candele", min_value=50, max_value=500, value=200, step=10)
     st.divider()
     st.header("Grafico")
-    chart_type = st.selectbox("Tipo", ["Candlestick", "Linea", "Barre"], index=0)
+    chart_type = st.selectbox("Tipo grafico", ["Candlestick", "Linea", "Barre"], index=0)
+    st.caption("Zoom verticale/orizzontale con scroll o box-select. Drag per pan.")
     auto_refresh = st.toggle("Aggiornamento automatico", value=False)
     refresh_seconds = st.number_input("Secondi tra refresh", min_value=1, max_value=60, value=5)
 
@@ -48,23 +53,23 @@ with st.sidebar:
     indicator_selections: List[SelectedIndicator] = []
     for name in selected_indicator_names:
         spec = indicator_lookup[name]
-        st.caption(f"{spec.name} · {spec.description}")
-        placement = st.selectbox(
-            f"Posizione {spec.name}",
-            ["overlay", "below", "tab"],
-            index=["overlay", "below", "tab"].index(spec.placement),
-            key=f"placement-{spec.name}",
-        )
-        params: Dict[str, float] = {}
-        for param_name, default_value in spec.params.items():
-            params[param_name] = st.number_input(
-                f"{spec.name} · {param_name}",
-                value=float(default_value),
-                key=f"param-{spec.name}-{param_name}",
+        with st.expander(f"{spec.name} · {spec.description}", expanded=True):
+            placement = st.selectbox(
+                "Posizione",
+                ["overlay", "below", "tab"],
+                index=["overlay", "below", "tab"].index(spec.placement),
+                key=f"placement-{spec.name}",
             )
-        indicator_selections.append(
-            SelectedIndicator(spec=spec, params=params, placement=placement)
-        )
+            params: Dict[str, float] = {}
+            for param_name, default_value in spec.params.items():
+                params[param_name] = st.number_input(
+                    f"{param_name}",
+                    value=float(default_value),
+                    key=f"param-{spec.name}-{param_name}",
+                )
+            indicator_selections.append(
+                SelectedIndicator(spec=spec, params=params, placement=placement)
+            )
 
 st.subheader(title_override)
 
@@ -85,8 +90,24 @@ request = MarketRequest(
 def load_data(request: MarketRequest) -> pd.DataFrame:
     return fetch_ohlcv(request)
 
+
+@st.cache_data(ttl=5)
+def load_compare_data(symbols: List[str]) -> Dict[str, pd.DataFrame]:
+    datasets: Dict[str, pd.DataFrame] = {}
+    for item in symbols:
+        compare_request = MarketRequest(
+            symbol=item,
+            interval=interval,
+            limit=limit,
+            source=source,
+        )
+        datasets[item] = fetch_ohlcv(compare_request)
+    return datasets
+
 try:
     data = load_data(request)
+    compare_list = [item.strip() for item in compare_symbols.split(",") if item.strip()]
+    compare_data = load_compare_data(compare_list) if compare_list else {}
 except Exception as exc:  # noqa: BLE001
     st.error(f"Errore durante il fetch dei dati: {exc}")
     st.stop()
@@ -100,7 +121,7 @@ overlay_indicators = [ind for ind in indicator_selections if ind.placement == "o
 tab_indicators = [ind for ind in indicator_selections if ind.placement == "tab"]
 
 rows = 1 + len(below_indicators)
-row_heights = [0.6] + [0.4 / max(len(below_indicators), 1)] * len(below_indicators)
+row_heights = [0.7] + [0.3 / max(len(below_indicators), 1)] * len(below_indicators)
 fig = make_subplots(
     rows=rows,
     cols=1,
@@ -118,6 +139,10 @@ if chart_type == "Candlestick":
             low=data["low"],
             close=data["close"],
             name=symbol,
+            increasing_line_color="#16a34a",
+            increasing_fillcolor="#22c55e",
+            decreasing_line_color="#dc2626",
+            decreasing_fillcolor="#ef4444",
         ),
         row=1,
         col=1,
@@ -143,6 +168,22 @@ else:
         row=1,
         col=1,
     )
+
+if compare_data:
+    for compare_symbol, compare_df in compare_data.items():
+        if compare_df.empty:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=compare_df["timestamp"],
+                y=compare_df["close"],
+                mode="lines",
+                name=compare_symbol,
+                line=dict(width=1.5, dash="dot"),
+            ),
+            row=1,
+            col=1,
+        )
 
 for indicator in overlay_indicators:
     indicator_data = compute_indicator(indicator, data)
@@ -177,12 +218,36 @@ for index, indicator in enumerate(below_indicators, start=2):
         )
 
 fig.update_layout(
-    height=700,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    margin=dict(l=40, r=40, t=40, b=40),
+    height=720,
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    margin=dict(l=40, r=40, t=40, b=30),
+    plot_bgcolor="#ffffff",
+    paper_bgcolor="#ffffff",
+    hovermode="x unified",
+    dragmode="pan",
+)
+fig.update_xaxes(
+    showgrid=True,
+    gridcolor="rgba(148, 163, 184, 0.2)",
+    rangeslider=dict(
+        visible=True,
+        bgcolor="rgba(148, 163, 184, 0.12)",
+        bordercolor="rgba(148, 163, 184, 0.4)",
+        borderwidth=1,
+        thickness=0.06,
+    ),
+)
+fig.update_yaxes(
+    showgrid=True,
+    gridcolor="rgba(148, 163, 184, 0.2)",
+    fixedrange=False,
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    config=dict(scrollZoom=True, displaylogo=False, responsive=True),
+)
 
 if tab_indicators:
     st.subheader("Indicatori in tab")
