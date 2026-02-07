@@ -90,6 +90,39 @@ def _kalman(df: pd.DataFrame, params: Dict[str, float]) -> pd.DataFrame:
     return pd.DataFrame({"Kalman": state_means.flatten()})
 
 
+def _support_resistance(df: pd.DataFrame, params: Dict[str, float]) -> pd.DataFrame:
+    window = int(params["window"])
+    lookback = int(params["lookback"])
+    prices = df["close"].to_numpy()
+    indices = np.arange(len(prices))
+    pivot_highs = []
+    pivot_lows = []
+    for i in range(window, len(prices) - window):
+        window_slice = prices[i - window : i + window + 1]
+        if prices[i] == window_slice.max():
+            pivot_highs.append(i)
+        if prices[i] == window_slice.min():
+            pivot_lows.append(i)
+    pivot_highs = pivot_highs[-lookback:]
+    pivot_lows = pivot_lows[-lookback:]
+
+    support = np.full(len(prices), np.nan)
+    resistance = np.full(len(prices), np.nan)
+    if len(pivot_lows) >= 2:
+        slope, intercept = np.polyfit(indices[pivot_lows], prices[pivot_lows], 1)
+        support = slope * indices + intercept
+    elif pivot_lows:
+        support = np.full(len(prices), prices[pivot_lows[-1]])
+
+    if len(pivot_highs) >= 2:
+        slope, intercept = np.polyfit(indices[pivot_highs], prices[pivot_highs], 1)
+        resistance = slope * indices + intercept
+    elif pivot_highs:
+        resistance = np.full(len(prices), prices[pivot_highs[-1]])
+
+    return pd.DataFrame({"Support": support, "Resistance": resistance})
+
+
 INDICATORS: List[IndicatorSpec] = [
     IndicatorSpec(
         name="SMA",
@@ -139,5 +172,12 @@ INDICATORS: List[IndicatorSpec] = [
         params={"transition_cov": 0.01, "observation_cov": 1.0},
         placement="overlay",
         compute=_kalman,
+    ),
+    IndicatorSpec(
+        name="SupportResistance",
+        description="Supporti e resistenze (orizzontali/oblique)",
+        params={"window": 5, "lookback": 60},
+        placement="overlay",
+        compute=_support_resistance,
     ),
 ]

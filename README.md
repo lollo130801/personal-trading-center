@@ -9,9 +9,13 @@ Piattaforma locale per visualizzare mercati e indicatori in maniera interattiva,
 - Indicatori sovrapposti, in pannelli sotto al grafico o in tab dedicate.
 - Indicatori di default: SMA, EMA, WMA, RSI, filtro Fourier, filtro di Kalman.
 - Onde principali di Fourier con suggerimenti ML per rialzo/ribasso.
+- Supporti e resistenze automatici con linee orizzontali/oblique.
+- Divergenze positive/negative sugli indicatori (es. RSI).
 - Supporto per indicatori personalizzati in Python.
 - Dati in tempo reale (minimo 1 secondo, massimo 1 mese) tramite Binance o Yahoo Finance.
-- Sessioni salvabili e news/report economici (Investing.com) opzionali.
+- Sessioni salvabili e news/report economici (FXStreet/Investing.com) opzionali.
+- Calendario economico ad alta importanza visibile sul grafico giornaliero.
+- Filtro periodo per analizzare gli indicatori tra due date.
 
 ## Avvio rapido
 

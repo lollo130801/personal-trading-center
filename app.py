@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -75,6 +76,59 @@ def _fetch_economic_news() -> List[Tuple[str, str]]:
     except Exception:  # noqa: BLE001
         return []
 
+
+def _fetch_fxstreet_events(
+    start: datetime,
+    end: datetime,
+    min_importance: int = 3,
+) -> List[Dict[str, object]]:
+    params = {
+        "from": start.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "to": end.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "timezone": "UTC",
+        "culture": "it-IT",
+    }
+    response = requests.get(
+        "https://calendar-api.fxstreet.com/v1/events",
+        params=params,
+        timeout=10,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; PersonalTradingCenter/1.0)"},
+    )
+    response.raise_for_status()
+    events = response.json()
+    filtered = []
+    for event in events:
+        importance = event.get("importance", 0)
+        if importance >= min_importance:
+            filtered.append(event)
+    return filtered
+
+
+def _detect_divergences(
+    price: pd.Series,
+    indicator: pd.Series,
+    window: int = 5,
+) -> Tuple[List[int], List[int]]:
+    lows = []
+    highs = []
+    for idx in range(window, len(price) - window):
+        price_slice = price.iloc[idx - window : idx + window + 1]
+        if price.iloc[idx] == price_slice.min():
+            lows.append(idx)
+        if price.iloc[idx] == price_slice.max():
+            highs.append(idx)
+    bullish = []
+    bearish = []
+    for i in range(1, len(lows)):
+        prev_idx, curr_idx = lows[i - 1], lows[i]
+        if price.iloc[curr_idx] < price.iloc[prev_idx] and indicator.iloc[curr_idx] > indicator.iloc[prev_idx]:
+            bullish.append(curr_idx)
+    for i in range(1, len(highs)):
+        prev_idx, curr_idx = highs[i - 1], highs[i]
+        if price.iloc[curr_idx] > price.iloc[prev_idx] and indicator.iloc[curr_idx] < indicator.iloc[prev_idx]:
+            bearish.append(curr_idx)
+    return bullish, bearish
+
 DEFAULT_STATE = {
     "title": "Mercati e Indicatori",
     "source": "binance",
@@ -84,8 +138,10 @@ DEFAULT_STATE = {
     "show_volume": True,
     "auto_refresh": False,
     "refresh_seconds": 5,
-    "selected_indicators": ["SMA", "RSI", "Kalman", "FourierWaves"],
+    "selected_indicators": ["SMA", "RSI", "Kalman", "FourierWaves", "SupportResistance"],
     "compare_symbols": [],
+    "show_reports": False,
+    "show_news": True,
 }
 
 for key, value in DEFAULT_STATE.items():
@@ -207,6 +263,8 @@ with st.sidebar:
                     "auto_refresh": auto_refresh,
                     "refresh_seconds": refresh_seconds,
                     "selected_indicators": selected_indicator_names,
+                    "show_reports": show_reports,
+                    "show_news": show_news,
                 },
             )
     with col_load:
@@ -217,8 +275,16 @@ with st.sidebar:
 
     st.divider()
     st.header("Macro & News")
-    show_reports = st.toggle("Mostra report economici (3 stelle)", value=False)
-    show_news = st.toggle("Ticker news economiche", value=True)
+    show_reports = st.toggle(
+        "Mostra report economici (alta importanza)",
+        value=st.session_state["show_reports"],
+        key="show_reports",
+    )
+    show_news = st.toggle(
+        "Ticker news economiche",
+        value=st.session_state["show_news"],
+        key="show_news",
+    )
 
 st.subheader(title_override)
 
@@ -266,6 +332,46 @@ except Exception as exc:  # noqa: BLE001
 if data.empty:
     st.warning("Nessun dato disponibile per i parametri selezionati.")
     st.stop()
+
+st.subheader("Filtro periodo")
+min_date = data["timestamp"].min().date()
+max_date = data["timestamp"].max().date()
+date_range = st.date_input(
+    "Seleziona intervallo",
+    value=(min_date, max_date),
+    min_value=min_date,
+    max_value=max_date,
+)
+if isinstance(date_range, tuple):
+    start_date, end_date = date_range
+else:
+    start_date, end_date = date_range, max_date
+
+mask = (data["timestamp"].dt.date >= start_date) & (data["timestamp"].dt.date <= end_date)
+data = data.loc[mask].reset_index(drop=True)
+filtered_compare_data = {}
+for key, compare_df in compare_data.items():
+    if compare_df.empty:
+        filtered_compare_data[key] = compare_df
+        continue
+    compare_mask = (compare_df["timestamp"].dt.date >= start_date) & (
+        compare_df["timestamp"].dt.date <= end_date
+    )
+    filtered_compare_data[key] = compare_df.loc[compare_mask].reset_index(drop=True)
+compare_data = filtered_compare_data
+
+if data.empty:
+    st.warning("Nessun dato disponibile per il periodo selezionato.")
+    st.stop()
+
+events = []
+if show_reports or interval == "1d":
+    start_dt = datetime.combine(start_date, datetime.min.time())
+    end_dt = datetime.combine(end_date, datetime.max.time()) + timedelta(days=7)
+    try:
+        events = _fetch_fxstreet_events(start_dt, end_dt, min_importance=3)
+    except Exception:  # noqa: BLE001
+        events = []
 
 below_indicators = [ind for ind in indicator_selections if ind.placement == "below"]
 overlay_indicators = [ind for ind in indicator_selections if ind.placement == "overlay"]
@@ -344,6 +450,41 @@ if compare_data:
             col=1,
         )
 
+if interval == "1d" and events:
+    event_x = []
+    event_y = []
+    event_text = []
+    for event in events:
+        date_raw = event.get("date")
+        title = event.get("title", "Evento macro")
+        if not date_raw:
+            continue
+        try:
+            event_dt = datetime.fromisoformat(str(date_raw).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        event_x.append(event_dt)
+        if data["timestamp"].min() <= event_dt <= data["timestamp"].max():
+            nearest_idx = (data["timestamp"] - event_dt).abs().idxmin()
+            event_y.append(data.loc[nearest_idx, "close"])
+        else:
+            event_y.append(data["close"].iloc[-1])
+        event_text.append(title)
+    if event_x:
+        fig.add_trace(
+            go.Scatter(
+                x=event_x,
+                y=event_y,
+                mode="markers",
+                name="Eventi macro",
+                marker=dict(color="#f59e0b", size=8, symbol="diamond"),
+                text=event_text,
+                hovertemplate="%{text}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+
 current_row = 2
 if show_volume:
     fig.add_trace(
@@ -390,6 +531,32 @@ for indicator in below_indicators:
             row=current_row,
             col=1,
         )
+        if indicator.spec.name == "RSI":
+            bullish, bearish = _detect_divergences(data["close"], indicator_data[column])
+            if bullish:
+                fig.add_trace(
+                    go.Scatter(
+                        x=indicator_data["timestamp"].iloc[bullish],
+                        y=indicator_data[column].iloc[bullish],
+                        mode="markers",
+                        name="Divergenza positiva",
+                        marker=dict(symbol="triangle-up", color="#16a34a", size=10),
+                    ),
+                    row=current_row,
+                    col=1,
+                )
+            if bearish:
+                fig.add_trace(
+                    go.Scatter(
+                        x=indicator_data["timestamp"].iloc[bearish],
+                        y=indicator_data[column].iloc[bearish],
+                        mode="markers",
+                        name="Divergenza negativa",
+                        marker=dict(symbol="triangle-down", color="#dc2626", size=10),
+                    ),
+                    row=current_row,
+                    col=1,
+                )
     current_row += 1
 
 fig.update_layout(
@@ -437,12 +604,22 @@ if show_news:
 if show_reports:
     reports = _fetch_economic_reports()
     with st.expander("Report economici principali"):
-        st.caption("Fonte Investing.com (se il feed non include la priorità, mostra le ultime voci disponibili).")
-        if reports:
+        st.caption("Fonti: FXStreet (eventi con importanza alta) e Investing.com (feed RSS).")
+        if events:
+            for event in events[:12]:
+                date_raw = event.get("date")
+                title = event.get("title", "Evento macro")
+                try:
+                    event_dt = datetime.fromisoformat(str(date_raw).replace("Z", "+00:00"))
+                    formatted = event_dt.strftime("%Y-%m-%d %H:%M UTC")
+                except ValueError:
+                    formatted = "Data non disponibile"
+                st.markdown(f"- **{formatted}** · {title}")
+        elif reports:
             for title, link in reports[:10]:
                 st.markdown(f"- [{title}]({link})")
         else:
-            st.info("Impossibile recuperare il calendario economico da Investing.com.")
+            st.info("Impossibile recuperare il calendario economico.")
 
 st.divider()
 st.subheader("Suggerimenti ML su onde Fourier")
